@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  VPCStackName:
+    Type: String
+    Description: Name of the VPC stack
+  DBName:
+    Type: String
+  DBUser:
+    Type: String
+  DBPassword:
+    Type: String
+    NoEcho: true  
+  localhost:
+    Type: String
+    Description: localhost of RDS instance
+  SubnetId1:
+    Type: String
+    Description: ID of the first subnet
+  SubnetId2:
+    Type: String
+    Description: ID of the second subnet
+
+Resources:
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: ami-007855ac798b5175e
+      InstanceType: t2.micro
+      KeyName: my-key-pair
+      AssociatePublicIpAddress: true   # Enable public IP for instances
+      SecurityGroups:
+        - !ImportValue 
+            Fn::Sub: '${VPCStackName}-WebServerSGExport'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo apt-get update -y
+          sudo apt-get upgrade -y
+          sudo apt-get install apache2 -y
+          sudo systemctl status apache2 -y
+          sudo systemctl start apache2
+          sudo systemctl enable apache2
+          sudo apt-get install php php-mysql php-gd php-cli php-common -y
+          sudo apt-get install wget unzip -y
+          sudo wget https://wordpress.org/latest.zip
+          sudo unzip latest.zip
+          sudo cp -r wordpress/* /var/www/html/
+          cd /var/www/html
+          sudo chown www-data:www-data -R /var/www/html/
+          sudo rm -rf index.html
+          sudo cp wp-config-sample.php wp-config.php
+          sudo sed -i "s/database_name_here/${DBName}/g" wp-config.php
+          sudo sed -i "s/username_here/${DBUser}/g" wp-config.php
+          sudo sed -i "s/password_here/${DBPassword}/g" wp-config.php
+          sudo sed -i "s/localhost/${localhost}/g" wp-config.php
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 2
+      TargetGroupARNs:
+        - !ImportValue 
+            Fn::Sub: '${VPCStackName}-TGExport'
+      VPCZoneIdentifier:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+

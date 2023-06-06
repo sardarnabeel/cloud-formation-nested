@@ -1,0 +1,234 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: VPC Stack
+Parameters:
+  WebServerSGExportName:
+    Type: String
+    Description: The export name for the web server security group
+  TGExportName:
+    Type: String
+    Description: The export name for the target group
+Resources:
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyVPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      AvailabilityZone: us-east-1a
+      CidrBlock: 10.0.0.0/24
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      AvailabilityZone: us-east-1b
+      CidrBlock: 10.0.1.0/24
+      Tags:
+        - Key: Name
+          Value: PublicSubnet2
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      AvailabilityZone: us-east-1c
+      CidrBlock: 10.0.2.0/24
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: PublicSubnet1
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  LoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Load Balancer Security Group
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress: #Add line for testing
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: MyLoadBalancer
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref LoadBalancerSG
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Ref TGExportName
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      VpcId: !Ref MyVPC
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web Server Security Group
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Ref WebServerSGExportName
+      SecurityGroupIngress:
+         - IpProtocol: tcp
+           FromPort: 80
+           ToPort: 80
+           SourceSecurityGroupId: !Ref LoadBalancerSG   # Allow traffic from the load balancer
+         - IpProtocol: tcp
+           FromPort: 22
+           ToPort: 22
+           CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+         - IpProtocol: -1
+           CidrIp: 0.0.0.0/0
+          
+         
+  DBServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-007855ac798b5175e   #Replace with ami id
+      InstanceType: t2.micro   #replace with instnace type
+      KeyName: my-key-pair   # Replace with the name of  EC2 key pair
+      SubnetId: !Ref PrivateSubnet  # Import the private subnet ID from the VPC stack
+      Tags:
+        - Key: Name
+          Value: private-server-training
+      SecurityGroupIds:
+        - !Ref DBServerSG
+      UserData:
+        Fn::Base64: !Sub |         
+          #!/bin/bash
+          set -x
+          # Update and upgrade packages
+          sudo apt update -y
+          sudo apt upgrade -y
+          sudo apt install mysql-server -y
+          sudo mysql -h localhost -u root <<EOF
+          CREATE DATABASE test;
+          CREATE USER 'nabeel'@'%' IDENTIFIED BY 'test';
+          GRANT ALL PRIVILEGES ON *.* TO 'nabeel'@'%';
+          FLUSH PRIVILEGES;
+          EOF
+          sudo sed -i "s/.*bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf
+          sudo systemctl restart mysql
+  DBServerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database Server Security Group
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306   # Replace with the appropriate port for  database server
+          ToPort: 3306   # Replace with the appropriate port for  database server
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+Outputs:
+  WebServerSGExport:
+    Value: !Ref WebServerSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-WebServerSGExport'
+
+
+  TGExport:
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-TGExport'
