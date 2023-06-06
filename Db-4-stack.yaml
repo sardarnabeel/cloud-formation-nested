@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DB Server Stack
+Parameters:
+  VPCStackName:
+    Type: String
+    Description: Name of the VPC stack to import resources from
+  DBName:
+    Type: String
+    Description: Database Name
+  DBUser:
+    Type: String
+    Description: Database User
+  DBPassword:
+    Type: String
+    Description: Database Password
+  dbintance:
+    Type: String
+  PrivateID:
+    Type: String
+  vpcid:
+    Type: String
+Resources:
+  DBServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-007855ac798b5175e   #Replace with ami id
+      InstanceType: t2.micro   #replace with instnace type
+      KeyName: my-key-pair   # Replace with the name of  EC2 key pair
+      SubnetId: !Ref PrivateID  # Import the private subnet ID from the VPC stack
+      Tags:
+        - Key: Name
+          Value: private-server-training
+      SecurityGroupIds:
+        - !Ref dbintance
+      UserData:
+        Fn::Base64: !Sub |         
+          #!/bin/bash
+          set -x
+          # Update and upgrade packages
+          sudo apt update -y
+          sudo apt upgrade -y
+          sudo apt install mysql-server -y
+          sudo mysql -h localhost -u root <<EOF
+          CREATE DATABASE test;
+          CREATE USER 'nabeel'@'%' IDENTIFIED BY 'test';
+          GRANT ALL PRIVILEGES ON *.* TO 'nabeel'@'%';
+          FLUSH PRIVILEGES;
+          EOF
+          sudo sed -i "s/.*bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mysql.conf.d/mysqld.cnf
+          sudo systemctl restart mysql
+#this will use when we use this value in other stack
+Outputs:
+  DBInstancePrivateIP:
+    Description: Private IP of the DB instance
+    Value: !GetAtt DBServer.PrivateIp
+    Export:
+      Name: !Sub '${AWS::StackName}-DBInstancePrivateIP'
